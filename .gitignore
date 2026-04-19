@@ -5,6 +5,7 @@ result*
 .vscode
 .DS_Store
 recorded_interventions/
+training_scripts/home/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
