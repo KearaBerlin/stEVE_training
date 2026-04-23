@@ -7,25 +7,31 @@ from util.util import get_result_checkpoint_config_and_log_path
 from util.env import BenchEnv
 from util.agent import BenchAgentSynchron
 from eve_rl import Runner
+import sys
+sys.path.append('stEVE_bench')
 from eve_bench import DualDeviceNav
+import wandb
+from datetime import datetime
 
-
-RESULTS_FOLDER = os.getcwd() + "/results/eve_paper/neurovascular/full/mesh_ben"
+RESULTS_FOLDER = os.getcwd() + "/results/"
+RUN_DESC = "wandb"
+DEBUG = True
+WANDB_TAGS = []
 
 EVAL_SEEDS = "1,2,3,5,6,7,8,9,10,12,13,14,16,17,18,21,22,23,27,31,34,35,37,39,42,43,44,47,48,50,52,55,56,58,61,62,63,68,69,70,71,73,79,80,81,84,89,91,92,93,95,97,102,103,108,109,110,115,116,117,118,120,122,123,124,126,127,128,129,130,131,132,134,136,138,139,140,141,142,143,144,147,148,149,150,151,152,154,155,156,158,159,161,162,167,168,171,175"
 EVAL_SEEDS = EVAL_SEEDS.split(",")
 EVAL_SEEDS = [int(seed) for seed in EVAL_SEEDS]
-HEATUP_STEPS = 5e5
-TRAINING_STEPS = 2e7
-CONSECUTIVE_EXPLORE_EPISODES = 100
-EXPLORE_STEPS_BTW_EVAL = 2.5e5
+HEATUP_STEPS = 600 if DEBUG else 5e5
+TRAINING_STEPS = 1200 if DEBUG else 2e7
+CONSECUTIVE_EXPLORE_EPISODES = 1 if DEBUG else 100
+EXPLORE_STEPS_BTW_EVAL = 200 if DEBUG else 2.5e5
 
 
 GAMMA = 0.99
 REWARD_SCALING = 1
 REPLAY_BUFFER_SIZE = 1e4
 CONSECUTIVE_ACTION_STEPS = 1
-BATCH_SIZE = 32
+BATCH_SIZE = 2 if DEBUG else 32
 UPDATE_PER_EXPLORE_STEP = 1 / 20
 
 
@@ -66,7 +72,7 @@ if __name__ == "__main__":
         help="Runs optuna run with stochastic eval function of SAC.",
     )
     parser.add_argument(
-        "-n", "--name", type=str, default="test", help="Name of the training run"
+        "-n", "--name", type=str, default=RUN_DESC, help="Name of the training run"
     )
 
     parser.add_argument(
@@ -109,6 +115,29 @@ if __name__ == "__main__":
     embedder_layers = args.embedder_layers
     worker_device = torch.device("cpu")
 
+    wandb_key = "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"
+    if DEBUG:
+        WANDB_TAGS = WANDB_TAGS + ['debug']
+    wandb_config = {'train_device': trainer_device,
+                    'worker_device': worker_device,
+                    'LR': lr, 'hidden_layers': hidden_layers,
+                    'batch': BATCH_SIZE,
+                    'n_workers': n_worker,
+                    'gamma': GAMMA,
+                    'embedder_layers': embedder_layers,
+                    'heatup_steps': HEATUP_STEPS,
+                    'explore_steps': EXPLORE_STEPS_BTW_EVAL,
+                    'explore_episdoes': CONSECUTIVE_EXPLORE_EPISODES,
+                    'update_per_explore': UPDATE_PER_EXPLORE_STEP,
+                    'action_steps': CONSECUTIVE_ACTION_STEPS,
+                    }
+    wandb_run = wandb.init(entity="kearaberlin-university-of-minnesota",
+                           project="stEVE_stroke",
+                           name=f"{RUN_DESC}_{datetime.now()}",
+                           tags=WANDB_TAGS,
+                           config=wandb_config)
+    # wandb_run.log({"LR": lr})
+
     custom_parameters = {
         "lr": lr,
         "hidden_layers": hidden_layers,
@@ -136,9 +165,9 @@ if __name__ == "__main__":
         force=True,
     )
 
-    intervention = DualDeviceNav()
+    intervention = DualDeviceNav() #name='train', wandb_run=wandb_run)
     env_train = BenchEnv(intervention=intervention, mode="train", visualisation=False)
-    intervention_eval = DualDeviceNav()
+    intervention_eval = DualDeviceNav() #name='eval', wandb_run=wandb_run)
     env_eval = BenchEnv(
         intervention=intervention_eval, mode="eval", visualisation=False
     )
@@ -161,6 +190,7 @@ if __name__ == "__main__":
         n_worker,
         stochastic_eval,
         False,
+        wandb_run,
     )
 
     env_train_config = os.path.join(config_folder, "env_train.yml")
@@ -178,8 +208,8 @@ if __name__ == "__main__":
         info_results=infos,
         quality_info="success",
     )
-    runner_config = os.path.join(config_folder, "runner.yml")
-    runner.save_config(runner_config)
+    # runner_config = os.path.join(config_folder, "runner.yml")
+    # runner.save_config(runner_config)
 
     reward, success = runner.training_run(
         HEATUP_STEPS,

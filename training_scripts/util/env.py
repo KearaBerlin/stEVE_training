@@ -9,9 +9,11 @@ class BenchEnv(eve.Env):
         mode: str = "train",
         visualisation: bool = False,
         n_max_steps=1000,
+        wandb_run = None,
     ) -> None:
         self.mode = mode
         self.visualisation = visualisation
+        self.wandb_run = wandb_run
         start = eve.start.InsertionPoint(intervention)
         pathfinder = eve.pathfinder.BruteForceBFS(intervention=intervention)
         # Observation

@@ -140,6 +140,7 @@ class BenchAgentSynchron(eve_rl.agent.Synchron):
         n_worker,
         stochastic_eval: bool = False,
         ff_only: bool = False,
+        wandb_run = None,
     ):
 
         obs_dict = env_train.observation_space.sample()
@@ -236,6 +237,7 @@ class BenchAgentSynchron(eve_rl.agent.Synchron):
             n_worker=n_worker,
             normalize_actions=True,
             timeout_worker_after_reaching_limit=180,
+            wandb_run=wandb_run,
         )
 
 
