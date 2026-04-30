@@ -7,8 +7,10 @@ import optuna
 from util.agent import BenchAgentSynchron
 from util.env import BenchEnv
 from util.optunapruner import CombinationPruner, StagnatingPruner
+from util.schedule_args import add_schedule_args, schedule_from_args
 from util.util import get_result_checkpoint_config_and_log_path
-from eve_rl import Runner
+from util.wandb_runner import WandbRunner
+from util.wandb_tracking import add_wandb_args, finish_wandb, init_wandb
 from eve_bench import ArchVariety
 
 
@@ -78,12 +80,37 @@ if __name__ == "__main__":
             "hidden_layers": hidden_layers,
             "embedder_nodes": embedder_nodes,
             "embedder_layers": embedder_layers,
-            "HEATUP_STEPS": HEATUP_STEPS,
-            "EXPLORE_STEPS_BTW_EVAL": EXPLORE_STEPS_BTW_EVAL,
-            "CONSECUTIVE_EXPLORE_EPISODES": CONSECUTIVE_EXPLORE_EPISODES,
+            "HEATUP_STEPS": schedule["heatup_steps"],
+            "EXPLORE_STEPS_BTW_EVAL": schedule["eval_interval"],
+            "CONSECUTIVE_EXPLORE_EPISODES": schedule["explore_episodes"],
             "BATCH_SIZE": BATCH_SIZE,
-            "UPDATE_PER_EXPLORE_STEP": UPDATE_PER_EXPLORE_STEP,
+            "UPDATE_PER_EXPLORE_STEP": schedule["update_per_explore_step"],
         }
+        wandb_config = {
+            **custom_parameters,
+            "environment": "ArchVariety",
+            "script": os.path.basename(__file__),
+            "optimizer": "optuna",
+            "trial_number": trial.number,
+            "trainer_device": trainer_device,
+            "worker_device": worker_device,
+            "n_workers": n_worker,
+            "gamma": GAMMA,
+            "reward_scaling": REWARD_SCALING,
+            "replay_buffer_size": REPLAY_BUFFER_SIZE,
+            "consecutive_action_steps": CONSECUTIVE_ACTION_STEPS,
+            "lr_end_factor": LR_END_FACTOR,
+            "lr_linear_end_steps": LR_LINEAR_END_STEPS,
+            "training_steps": schedule["training_steps"],
+            "eval_seed_count": len(eval_seeds),
+            "stochastic_eval": stochastic_eval,
+        }
+        wandb_run = init_wandb(
+            args,
+            run_name=f"{trial_name}_trial_{trial.number}",
+            config=wandb_config,
+            tags=["ArchVariety", "Optuna", "SAC", "RL"],
+        )
         intervention = ArchVariety(episodes_between_arch_change=1)
         env_train = BenchEnv(
             intervention=intervention, mode="train", visualisation=False
@@ -117,7 +144,7 @@ if __name__ == "__main__":
         env_eval.save_config(env_eval_config)
         infos = list(env_eval.info.info.keys())
 
-        runner = Runner(
+        runner = WandbRunner(
             agent=agent,
             heatup_action_low=[-10.0, -1.0],
             heatup_action_high=[25, 3.14],
@@ -126,35 +153,38 @@ if __name__ == "__main__":
             results_file=results_file,
             info_results=infos,
             quality_info="success",
+            wandb_run=wandb_run,
         )
         runner_config = os.path.join(config_folder, "runner.yml")
         runner.save_config(runner_config)
 
-        runner.heatup(HEATUP_STEPS)
-        next_eval_limit = EXPLORE_STEPS_BTW_EVAL
-        while runner.step_counter.exploration < TRAINING_STEPS:
-            runner.explore_and_update(
-                CONSECUTIVE_EXPLORE_EPISODES,
-                UPDATE_PER_EXPLORE_STEP,
-                explore_steps=EXPLORE_STEPS_BTW_EVAL,
-            )
-            quality, _ = runner.eval(seeds=EVAL_SEEDS)
-            trial.report(quality, runner.step_counter.exploration)
-            next_eval_limit += EXPLORE_STEPS_BTW_EVAL
+        quality = float("-inf")
+        try:
+            runner.heatup(schedule["heatup_steps"])
+            next_eval_limit = schedule["eval_interval"]
+            while runner.step_counter.exploration < schedule["training_steps"]:
+                runner.explore_and_update(
+                    schedule["explore_episodes"],
+                    schedule["update_per_explore_step"],
+                    explore_steps=schedule["eval_interval"],
+                )
+                quality, _ = runner.eval(seeds=eval_seeds)
+                trial.report(quality, runner.step_counter.exploration)
+                next_eval_limit += schedule["eval_interval"]
 
-            if trial.should_prune():
-                agent.close()
-                raise optuna.TrialPruned()
-            if agent.update_error:
-                break
-
-        agent.close()
-        del agent
-        del intervention
-        del env_eval
-        del env_train
-        del runner
-        torch.cuda.empty_cache()
+                if trial.should_prune():
+                    raise optuna.TrialPruned()
+                if agent.update_error:
+                    break
+        finally:
+            agent.close()
+            finish_wandb(wandb_run)
+            del agent
+            del intervention
+            del env_eval
+            del env_train
+            del runner
+            torch.cuda.empty_cache()
         return quality
 
     mp.set_start_method("spawn", force=True)
@@ -179,6 +209,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "-n", "--name", type=str, default="run", help="Name of the training run"
     )
+    add_schedule_args(
+        parser,
+        heatup_steps=HEATUP_STEPS,
+        training_steps=TRAINING_STEPS,
+        eval_interval=EXPLORE_STEPS_BTW_EVAL,
+        explore_episodes=CONSECUTIVE_EXPLORE_EPISODES,
+        update_per_explore_step=UPDATE_PER_EXPLORE_STEP,
+        eval_seed_count=len(EVAL_SEEDS),
+    )
+    add_wandb_args(parser)
 
     args = parser.parse_args()
 
@@ -187,6 +227,17 @@ if __name__ == "__main__":
     trial_name = args.name
     stochastic_eval = args.stochastic_eval
     worker_device = torch.device("cpu")
+    schedule = schedule_from_args(args)
+    eval_seeds = EVAL_SEEDS[: schedule["eval_seed_count"]]
+    print(
+        "Starting ArchVariety Optuna: "
+        f"heatup_steps={schedule['heatup_steps']}, "
+        f"training_steps={schedule['training_steps']}, "
+        f"eval_interval={schedule['eval_interval']}, "
+        f"explore_episodes={schedule['explore_episodes']}, "
+        f"eval_seed_count={len(eval_seeds)}, "
+        f"workers={n_worker}, device={trainer_device}"
+    )
 
     pruner_median = optuna.pruners.MedianPruner(
         n_startup_trials=5, n_warmup_steps=TRAINING_STEPS / 5

@@ -1,5 +1,6 @@
 import eve
 import eve.visualisation
+from util.env_metrics import NavigationMetrics
 
 
 class BenchEnv(eve.Env):
@@ -68,8 +69,16 @@ class BenchEnv(eve.Env):
         steps = eve.info.Steps()
         trans_speed = eve.info.AverageTranslationSpeed(intervention)
         trajectory_length = eve.info.TrajectoryLength(intervention)
+        navigation_metrics = NavigationMetrics(intervention, pathfinder, n_max_steps)
         info = eve.info.Combination(
-            [target_reached, path_ratio, steps, trans_speed, trajectory_length]
+            [
+                target_reached,
+                path_ratio,
+                steps,
+                trans_speed,
+                trajectory_length,
+                navigation_metrics,
+            ]
         )
 
         if visualisation:

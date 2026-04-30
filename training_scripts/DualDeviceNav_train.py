@@ -6,17 +6,16 @@ import torch
 from util.util import get_result_checkpoint_config_and_log_path
 from util.env import BenchEnv
 from util.agent import BenchAgentSynchron
-from eve_rl import Runner
+from util.schedule_args import add_schedule_args, schedule_from_args
+from util.wandb_runner import WandbRunner
+from util.wandb_tracking import add_wandb_args, finish_wandb, init_wandb
 import sys
-sys.path.append('stEVE_bench')
+
+sys.path.append("stEVE_bench")
 from eve_bench import DualDeviceNav
-import wandb
-from datetime import datetime
 
 RESULTS_FOLDER = os.getcwd() + "/results/"
-RUN_DESC = "wandb"
 DEBUG = True
-WANDB_TAGS = []
 
 EVAL_SEEDS = "1,2,3,5,6,7,8,9,10,12,13,14,16,17,18,21,22,23,27,31,34,35,37,39,42,43,44,47,48,50,52,55,56,58,61,62,63,68,69,70,71,73,79,80,81,84,89,91,92,93,95,97,102,103,108,109,110,115,116,117,118,120,122,123,124,126,127,128,129,130,131,132,134,136,138,139,140,141,142,143,144,147,148,149,150,151,152,154,155,156,158,159,161,162,167,168,171,175"
 EVAL_SEEDS = EVAL_SEEDS.split(",")
@@ -72,7 +71,11 @@ if __name__ == "__main__":
         help="Runs optuna run with stochastic eval function of SAC.",
     )
     parser.add_argument(
-        "-n", "--name", type=str, default=RUN_DESC, help="Name of the training run"
+        "-n",
+        "--name",
+        type=str,
+        default="DualDeviceNav",
+        help="Name of the training run",
     )
 
     parser.add_argument(
@@ -103,6 +106,16 @@ if __name__ == "__main__":
         default=1,
         help="Number of layers in embedder",
     )
+    add_schedule_args(
+        parser,
+        heatup_steps=HEATUP_STEPS,
+        training_steps=TRAINING_STEPS,
+        eval_interval=EXPLORE_STEPS_BTW_EVAL,
+        explore_episodes=CONSECUTIVE_EXPLORE_EPISODES,
+        update_per_explore_step=UPDATE_PER_EXPLORE_STEP,
+        eval_seed_count=len(EVAL_SEEDS),
+    )
+    add_wandb_args(parser)
     args = parser.parse_args()
 
     trainer_device = torch.device(args.device)
@@ -114,41 +127,56 @@ if __name__ == "__main__":
     embedder_nodes = args.embedder_nodes
     embedder_layers = args.embedder_layers
     worker_device = torch.device("cpu")
-
-    wandb_key = "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"
-    if DEBUG:
-        WANDB_TAGS = WANDB_TAGS + ['debug']
-    wandb_config = {'train_device': trainer_device,
-                    'worker_device': worker_device,
-                    'LR': lr, 'hidden_layers': hidden_layers,
-                    'batch': BATCH_SIZE,
-                    'n_workers': n_worker,
-                    'gamma': GAMMA,
-                    'embedder_layers': embedder_layers,
-                    'heatup_steps': HEATUP_STEPS,
-                    'explore_steps': EXPLORE_STEPS_BTW_EVAL,
-                    'explore_episdoes': CONSECUTIVE_EXPLORE_EPISODES,
-                    'update_per_explore': UPDATE_PER_EXPLORE_STEP,
-                    'action_steps': CONSECUTIVE_ACTION_STEPS,
-                    }
-    wandb_run = wandb.init(entity="kearaberlin-university-of-minnesota",
-                           project="stEVE_stroke",
-                           name=f"{RUN_DESC}_{datetime.now()}",
-                           tags=WANDB_TAGS,
-                           config=wandb_config)
-    # wandb_run.log({"LR": lr})
+    schedule = schedule_from_args(args)
+    eval_seeds = EVAL_SEEDS[: schedule["eval_seed_count"]]
 
     custom_parameters = {
         "lr": lr,
         "hidden_layers": hidden_layers,
         "embedder_nodes": embedder_nodes,
         "embedder_layers": embedder_layers,
-        "HEATUP_STEPS": HEATUP_STEPS,
-        "EXPLORE_STEPS_BTW_EVAL": EXPLORE_STEPS_BTW_EVAL,
-        "CONSECUTIVE_EXPLORE_EPISODES": CONSECUTIVE_EXPLORE_EPISODES,
+        "HEATUP_STEPS": schedule["heatup_steps"],
+        "EXPLORE_STEPS_BTW_EVAL": schedule["eval_interval"],
+        "CONSECUTIVE_EXPLORE_EPISODES": schedule["explore_episodes"],
         "BATCH_SIZE": BATCH_SIZE,
-        "UPDATE_PER_EXPLORE_STEP": UPDATE_PER_EXPLORE_STEP,
+        "UPDATE_PER_EXPLORE_STEP": schedule["update_per_explore_step"],
     }
+    wandb_config = {
+        **custom_parameters,
+        "environment": "DualDeviceNav",
+        "script": os.path.basename(__file__),
+        "trainer_device": trainer_device,
+        "worker_device": worker_device,
+        "n_workers": n_worker,
+        "gamma": GAMMA,
+        "reward_scaling": REWARD_SCALING,
+        "replay_buffer_size": REPLAY_BUFFER_SIZE,
+        "consecutive_action_steps": CONSECUTIVE_ACTION_STEPS,
+        "lr_end_factor": LR_END_FACTOR,
+        "lr_linear_end_steps": LR_LINEAR_END_STEPS,
+        "training_steps": schedule["training_steps"],
+        "eval_seed_count": len(eval_seeds),
+        "stochastic_eval": stochastic_eval,
+        "debug": DEBUG,
+    }
+    wandb_tags = ["DualDeviceNav", "SAC", "RL"]
+    if DEBUG:
+        wandb_tags.append("debug")
+    wandb_run = init_wandb(
+        args,
+        run_name=trial_name,
+        config=wandb_config,
+        tags=wandb_tags,
+    )
+    print(
+        "Starting DualDeviceNav: "
+        f"heatup_steps={schedule['heatup_steps']}, "
+        f"training_steps={schedule['training_steps']}, "
+        f"eval_interval={schedule['eval_interval']}, "
+        f"explore_episodes={schedule['explore_episodes']}, "
+        f"eval_seed_count={len(eval_seeds)}, "
+        f"workers={n_worker}, device={trainer_device}"
+    )
 
     (
         results_file,
@@ -165,9 +193,9 @@ if __name__ == "__main__":
         force=True,
     )
 
-    intervention = DualDeviceNav() #name='train', wandb_run=wandb_run)
+    intervention = DualDeviceNav()
     env_train = BenchEnv(intervention=intervention, mode="train", visualisation=False)
-    intervention_eval = DualDeviceNav() #name='eval', wandb_run=wandb_run)
+    intervention_eval = DualDeviceNav()
     env_eval = BenchEnv(
         intervention=intervention_eval, mode="eval", visualisation=False
     )
@@ -190,7 +218,6 @@ if __name__ == "__main__":
         n_worker,
         stochastic_eval,
         False,
-        wandb_run,
     )
 
     env_train_config = os.path.join(config_folder, "env_train.yml")
@@ -198,7 +225,7 @@ if __name__ == "__main__":
     env_eval_config = os.path.join(config_folder, "env_eval.yml")
     env_eval.save_config(env_eval_config)
     infos = list(env_eval.info.info.keys())
-    runner = Runner(
+    runner = WandbRunner(
         agent=agent,
         heatup_action_low=[[-10.0, -1.0], [-11.0, -1.0]],
         heatup_action_high=[[35, 3.14], [30, 3.14]],
@@ -207,16 +234,20 @@ if __name__ == "__main__":
         results_file=results_file,
         info_results=infos,
         quality_info="success",
+        wandb_run=wandb_run,
     )
     # runner_config = os.path.join(config_folder, "runner.yml")
     # runner.save_config(runner_config)
 
-    reward, success = runner.training_run(
-        HEATUP_STEPS,
-        TRAINING_STEPS,
-        EXPLORE_STEPS_BTW_EVAL,
-        CONSECUTIVE_EXPLORE_EPISODES,
-        UPDATE_PER_EXPLORE_STEP,
-        eval_seeds=EVAL_SEEDS,
-    )
-    agent.close()
+    try:
+        reward, success = runner.training_run(
+            schedule["heatup_steps"],
+            schedule["training_steps"],
+            schedule["eval_interval"],
+            schedule["explore_episodes"],
+            schedule["update_per_explore_step"],
+            eval_seeds=eval_seeds,
+        )
+    finally:
+        agent.close()
+        finish_wandb(wandb_run)

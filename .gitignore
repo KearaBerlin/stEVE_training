@@ -6,6 +6,8 @@ result*
 .DS_Store
 recorded_interventions/
 training_scripts/home/
+wandb/
+diagnostics/*.gif
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

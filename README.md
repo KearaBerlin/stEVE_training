@@ -10,7 +10,7 @@ You can find the scripts in the folder *training_scripts*. Currently it contains
 ```
 git clone --recurse-submodules https://github.com/lkarstensen/stEVE_training.git
 ```
-2. Install [SOFA](https://www.sofa-framework.org) (e.g. with the [stEVE instructions](https://github.com/lkarstensen/stEVE?tab=readme-ov-file#install-sofa-with-sofapython3-and-beamadapter)) 
+2. Install [SOFA](https://www.sofa-framework.org) with `SofaPython3` and `BeamAdapter` (see [SOFA-setup.md](SOFA-setup.md), or the [stEVE instructions](https://github.com/lkarstensen/stEVE?tab=readme-ov-file#install-sofa-with-sofapython3-and-beamadapter)) 
 3. Install and test [stEVE](https://github.com/lkarstensen/stEVE)
 ```
 python3 -m pip install -e ./eve
@@ -32,9 +32,20 @@ python3 ./eve_rl/examples/function_check.py
 
 Best way to start the training scripts is via console. You have to give the trainer device, amount of workers, learning rate and neural network structure as arguments. Training device and amount of workers depend on your available hardware. Additionally you can give each training a individual name for logging. 
 
+Training runs are configured to log to the shared Weights & Biases workspace. See [HOW_WANDB.md](HOW_WANDB.md) for the local API-key setup, collaborator setup, and the metrics that are tracked.
+
+Before launching a long run, use [HOW_WANDB.md](HOW_WANDB.md) to run a
+short environment sanity check and create a GIF from the RL observations.
+
 Here are examples to recreate the results from **insert paper**. Here we have an input embedder of 1 LSTM-layer with 500 nodes and policy- and q-networks with the structur [900 900 900 900]. In this example we train with 29 workers and training on a cuda GPU. You should leva 2-3 of your available threads for other tasks than workers. 
 
 Start your script and wait 1-2 days, depending on your setup. The scripts will create a *results* folder in your current working directory and log the training progress and save checkpoints for each evaluation. 
+
+For a short smoke test, use the schedule overrides so the run reaches W&B metrics
+quickly:
+```
+python3 ./training_scripts/BasicWireNav_train.py -d cuda -nw 2 -n BasicWireNav_smoke --heatup_steps 1000 --training_steps 3000 --eval_interval 1500 --explore_episodes 1 --eval_seed_count 2
+```
 
 ### BasicWireNav
 

@@ -7,7 +7,9 @@ import torch
 from util.env import BenchEnv
 from util.util import get_result_checkpoint_config_and_log_path
 from util.agent import BenchAgentSynchron
-from eve_rl import Runner
+from util.schedule_args import add_schedule_args, schedule_from_args
+from util.wandb_runner import WandbRunner
+from util.wandb_tracking import add_wandb_args, finish_wandb, init_wandb
 from eve_bench import BasicWireNav
 
 
@@ -98,6 +100,16 @@ if __name__ == "__main__":
         default=1,
         help="Number of layers in embedder",
     )
+    add_schedule_args(
+        parser,
+        heatup_steps=HEATUP_STEPS,
+        training_steps=TRAINING_STEPS,
+        eval_interval=EXPLORE_STEPS_BTW_EVAL,
+        explore_episodes=CONSECUTIVE_EXPLORE_EPISODES,
+        update_per_explore_step=UPDATE_PER_EXPLORE_STEP,
+        eval_seed_count=len(EVAL_SEEDS),
+    )
+    add_wandb_args(parser)
     args = parser.parse_args()
 
     trainer_device = torch.device(args.device)
@@ -109,18 +121,52 @@ if __name__ == "__main__":
     embedder_nodes = args.embedder_nodes
     embedder_layers = args.embedder_layers
     worker_device = torch.device("cpu")
+    schedule = schedule_from_args(args)
+    eval_seeds = EVAL_SEEDS[: schedule["eval_seed_count"]]
 
     custom_parameters = {
         "lr": lr,
         "hidden_layers": hidden_layers,
         "embedder_nodes": embedder_nodes,
         "embedder_layers": embedder_layers,
-        "HEATUP_STEPS": HEATUP_STEPS,
-        "EXPLORE_STEPS_BTW_EVAL": EXPLORE_STEPS_BTW_EVAL,
-        "CONSECUTIVE_EXPLORE_EPISODES": CONSECUTIVE_EXPLORE_EPISODES,
+        "HEATUP_STEPS": schedule["heatup_steps"],
+        "EXPLORE_STEPS_BTW_EVAL": schedule["eval_interval"],
+        "CONSECUTIVE_EXPLORE_EPISODES": schedule["explore_episodes"],
         "BATCH_SIZE": BATCH_SIZE,
-        "UPDATE_PER_EXPLORE_STEP": UPDATE_PER_EXPLORE_STEP,
+        "UPDATE_PER_EXPLORE_STEP": schedule["update_per_explore_step"],
     }
+    wandb_config = {
+        **custom_parameters,
+        "environment": "BasicWireNav",
+        "script": os.path.basename(__file__),
+        "trainer_device": trainer_device,
+        "worker_device": worker_device,
+        "n_workers": n_worker,
+        "gamma": GAMMA,
+        "reward_scaling": REWARD_SCALING,
+        "replay_buffer_size": REPLAY_BUFFER_SIZE,
+        "consecutive_action_steps": CONSECUTIVE_ACTION_STEPS,
+        "lr_end_factor": LR_END_FACTOR,
+        "lr_linear_end_steps": LR_LINEAR_END_STEPS,
+        "training_steps": schedule["training_steps"],
+        "eval_seed_count": len(eval_seeds),
+        "stochastic_eval": stochastic_eval,
+    }
+    wandb_run = init_wandb(
+        args,
+        run_name=trial_name,
+        config=wandb_config,
+        tags=["BasicWireNav", "SAC", "RL"],
+    )
+    print(
+        "Starting BasicWireNav: "
+        f"heatup_steps={schedule['heatup_steps']}, "
+        f"training_steps={schedule['training_steps']}, "
+        f"eval_interval={schedule['eval_interval']}, "
+        f"explore_episodes={schedule['explore_episodes']}, "
+        f"eval_seed_count={len(eval_seeds)}, "
+        f"workers={n_worker}, device={trainer_device}"
+    )
 
     (
         results_file,
@@ -170,7 +216,7 @@ if __name__ == "__main__":
     env_eval_config = os.path.join(config_folder, "env_eval.yml")
     env_eval.save_config(env_eval_config)
     infos = list(env_eval.info.info.keys())
-    runner = Runner(
+    runner = WandbRunner(
         agent=agent,
         heatup_action_low=[-10.0, -1.0],
         heatup_action_high=[25, 3.14],
@@ -179,16 +225,20 @@ if __name__ == "__main__":
         results_file=results_file,
         info_results=infos,
         quality_info="success",
+        wandb_run=wandb_run,
     )
     runner_config = os.path.join(config_folder, "runner.yml")
     runner.save_config(runner_config)
 
-    reward, success = runner.training_run(
-        HEATUP_STEPS,
-        TRAINING_STEPS,
-        EXPLORE_STEPS_BTW_EVAL,
-        CONSECUTIVE_EXPLORE_EPISODES,
-        UPDATE_PER_EXPLORE_STEP,
-        eval_seeds=EVAL_SEEDS,
-    )
-    agent.close()
+    try:
+        reward, success = runner.training_run(
+            schedule["heatup_steps"],
+            schedule["training_steps"],
+            schedule["eval_interval"],
+            schedule["explore_episodes"],
+            schedule["update_per_explore_step"],
+            eval_seeds=eval_seeds,
+        )
+    finally:
+        agent.close()
+        finish_wandb(wandb_run)

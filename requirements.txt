@@ -1,0 +1,12 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+gymnasium
+numpy
+optuna
+pybind11==2.12.0
+pillow
+pygame
+PyOpenGL
+pyyaml
+scipy
+torch==2.10.0+cu128
+wandb
