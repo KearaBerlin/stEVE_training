@@ -8,7 +8,7 @@ You can find the scripts in the folder *training_scripts*. Currently it contains
 
 1. Clone the repo including the submodules:
 ```
-git clone -recurse-submodules https://github.com/lkarstensen/stEVE_training.git
+git clone --recurse-submodules https://github.com/lkarstensen/stEVE_training.git
 ```
 2. Install [SOFA](https://www.sofa-framework.org) (e.g. with the [stEVE instructions](https://github.com/lkarstensen/stEVE?tab=readme-ov-file#install-sofa-with-sofapython3-and-beamadapter)) 
 3. Install and test [stEVE](https://github.com/lkarstensen/stEVE)
